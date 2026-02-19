@@ -1,51 +1,48 @@
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Vercel KV for persistent storage
-let kv = null;
-async function initKV() {
+// Token storage file
+const TOKEN_FILE = '/tmp/twitter-tokens.json';
+
+function loadTokens() {
   try {
-    const { kv: kvClient } = await import('@vercel/kv');
-    kv = kvClient;
-    console.log('✅ Vercel KV connected');
-  } catch (error) {
-    console.log('⚠️ Vercel KV not available, using memory storage');
+    if (fs.existsSync(TOKEN_FILE)) {
+      const data = fs.readFileSync(TOKEN_FILE, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (e) {
+    console.error('Error loading tokens:', e.message);
+  }
+  return { access_token: null, refresh_token: null };
+}
+
+function saveTokens(tokens) {
+  try {
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
+    console.log('✅ Tokens saved');
+  } catch (e) {
+    console.error('Error saving tokens:', e.message);
   }
 }
 
-initKV();
+// Load tokens from file
+let tokens = loadTokens();
 
-// In-memory fallback
-let accessToken = null;
-let refreshToken = null;
-
-// Helper to store/retrieve tokens
 async function getToken(key) {
-  if (kv) {
-    try {
-      return await kv.get(key);
-    } catch (e) {
-      console.error('KV get error:', e.message);
-    }
-  }
-  return key === 'access_token' ? accessToken : refreshToken;
+  tokens = loadTokens(); // Reload in case it changed
+  return tokens[key];
 }
 
 async function setToken(key, value) {
-  if (kv) {
-    try {
-      await kv.set(key, value, { ex: 3600 * 24 * 7 }); // 7 days
-    } catch (e) {
-      console.error('KV set error:', e.message);
-    }
-  }
-  if (key === 'access_token') accessToken = value;
-  if (key === 'refresh_token') refreshToken = value;
+  tokens[key] = value;
+  saveTokens(tokens);
 }
 
 // X API credentials
