@@ -6,19 +6,47 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Vercel KV for persistent storage (optional - falls back to memory)
+// Vercel KV for persistent storage
 let kv = null;
-if (process.env.KV_REST_API_URL) {
-  const { createClient } = require('@vercel/kv');
-  kv = createClient({
-    url: process.env.KV_REST_API_URL,
-    token: process.env.KV_REST_API_TOKEN
-  });
+async function initKV() {
+  try {
+    const { kv: kvClient } = await import('@vercel/kv');
+    kv = kvClient;
+    console.log('✅ Vercel KV connected');
+  } catch (error) {
+    console.log('⚠️ Vercel KV not available, using memory storage');
+  }
 }
 
-// Store for OAuth state and access tokens
+initKV();
+
+// In-memory fallback
 let accessToken = null;
 let refreshToken = null;
+
+// Helper to store/retrieve tokens
+async function getToken(key) {
+  if (kv) {
+    try {
+      return await kv.get(key);
+    } catch (e) {
+      console.error('KV get error:', e.message);
+    }
+  }
+  return key === 'access_token' ? accessToken : refreshToken;
+}
+
+async function setToken(key, value) {
+  if (kv) {
+    try {
+      await kv.set(key, value, { ex: 3600 * 24 * 7 }); // 7 days
+    } catch (e) {
+      console.error('KV set error:', e.message);
+    }
+  }
+  if (key === 'access_token') accessToken = value;
+  if (key === 'refresh_token') refreshToken = value;
+}
 
 // X API credentials
 const CLIENT_ID = process.env.TWITTER_CLIENT_ID;
@@ -77,12 +105,12 @@ app.get('/callback', async (req, res) => {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     });
     
-    accessToken = tokenResponse.data.access_token;
-    refreshToken = tokenResponse.data.refresh_token;
+    const token = tokenResponse.data.access_token;
+    const refresh = tokenResponse.data.refresh_token;
     
-    // Store tokens (in production, use secure storage)
-    process.env.TWITTER_ACCESS_TOKEN = accessToken;
-    process.env.TWITTER_REFRESH_TOKEN = refreshToken;
+    // Store tokens persistently
+    await setToken('access_token', token);
+    await setToken('refresh_token', refresh);
     
     res.send(`
       <html>
@@ -105,7 +133,10 @@ app.get('/callback', async (req, res) => {
 
 // Bookmarks endpoint
 app.get('/bookmarks', async (req, res) => {
-  if (!accessToken) {
+  const token = await getToken('access_token');
+  const refresh = await getToken('refresh_token');
+  
+  if (!token) {
     return res.status(401).json({ 
       error: 'Not authenticated. Visit /login first.' 
     });
@@ -119,7 +150,7 @@ app.get('/bookmarks', async (req, res) => {
       `https://api.twitter.com/2/users/:id/bookmarks?max_results=${maxResults}&tweet.fields=created_at,public_metrics&user.fields=username,name&expansions=author_id`,
       {
         headers: {
-          'Authorization': `Bearer ${accessToken}`,
+          'Authorization': `Bearer ${token}`,
           'User-Agent': 'TwitterBookmarksClient/1.0'
         }
       }
@@ -149,16 +180,17 @@ app.get('/bookmarks', async (req, res) => {
     console.error('Bookmarks fetch failed:', error.response?.data || error.message);
     
     // Try to refresh token if expired
-    if (error.response?.status === 401 && refreshToken) {
+    if (error.response?.status === 401 && refresh) {
       try {
         const refreshResponse = await axios.post('https://twitter.com/2/oauth2/token', {
-          refresh_token: refreshToken,
+          refresh_token: refresh,
           grant_type: 'refresh_token',
           client_id: CLIENT_ID,
           client_secret: CLIENT_SECRET
         });
         
-        accessToken = refreshResponse.data.access_token;
+        const newToken = refreshResponse.data.access_token;
+        await setToken('access_token', newToken);
         // Retry the bookmarks request
         return res.redirect(`/bookmarks?limit=${maxResults}`);
       } catch (refreshError) {
