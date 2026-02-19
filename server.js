@@ -8,41 +8,27 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Token storage file
-const TOKEN_FILE = '/tmp/twitter-tokens.json';
-
-function loadTokens() {
-  try {
-    if (fs.existsSync(TOKEN_FILE)) {
-      const data = fs.readFileSync(TOKEN_FILE, 'utf8');
-      return JSON.parse(data);
-    }
-  } catch (e) {
-    console.error('Error loading tokens:', e.message);
-  }
-  return { access_token: null, refresh_token: null };
-}
-
-function saveTokens(tokens) {
-  try {
-    fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
-    console.log('✅ Tokens saved');
-  } catch (e) {
-    console.error('Error saving tokens:', e.message);
-  }
-}
-
-// Load tokens from file
-let tokens = loadTokens();
-
+// Use environment variables for token storage
 async function getToken(key) {
-  tokens = loadTokens(); // Reload in case it changed
-  return tokens[key];
+  if (key === 'access_token') {
+    return process.env.TWITTER_ACCESS_TOKEN_STORED;
+  } else if (key === 'refresh_token') {
+    return process.env.TWITTER_REFRESH_TOKEN_STORED;
+  }
+  return null;
 }
 
 async function setToken(key, value) {
-  tokens[key] = value;
-  saveTokens(tokens);
+  // Log instruction to save token to Vercel env vars
+  const envName = key === 'access_token' ? 'TWITTER_ACCESS_TOKEN_STORED' : 'TWITTER_REFRESH_TOKEN_STORED';
+  console.log(`\n⚠️  SAVE THIS TO VERCEL DASHBOARD:\n${envName}=${value}\n`);
+  
+  // Also set in current process
+  if (key === 'access_token') {
+    process.env.TWITTER_ACCESS_TOKEN_STORED = value;
+  } else {
+    process.env.TWITTER_REFRESH_TOKEN_STORED = value;
+  }
 }
 
 // X API credentials
@@ -105,16 +91,27 @@ app.get('/callback', async (req, res) => {
     const token = tokenResponse.data.access_token;
     const refresh = tokenResponse.data.refresh_token;
     
-    // Store tokens persistently
+    // Store tokens in env vars
     await setToken('access_token', token);
     await setToken('refresh_token', refresh);
+    
+    // Show tokens to user so they can add to Vercel
+    const envInstructions = `
+      Add these to Vercel Dashboard (Settings → Environment Variables):
+      
+      TWITTER_ACCESS_TOKEN_STORED=${token}
+      TWITTER_REFRESH_TOKEN_STORED=${refresh}
+    `;
     
     res.send(`
       <html>
         <body>
           <h1>✅ Authentication Successful!</h1>
-          <p>You can now use the /bookmarks endpoint.</p>
-          <p>Return to your terminal.</p>
+          <p>To make bookmarks work permanently, add these env vars to your Vercel project:</p>
+          <pre style="background: #f0f0f0; padding: 10px; overflow: auto;">
+${envInstructions}
+          </pre>
+          <p>Then redeploy the project.</p>
           <script>window.close();</script>
         </body>
       </html>
