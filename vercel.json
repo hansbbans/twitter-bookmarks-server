@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "server.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "server.js"
+    }
+  ],
+  "env": {
+    "TWITTER_CLIENT_ID": "@twitter_client_id",
+    "TWITTER_CLIENT_SECRET": "@twitter_client_secret",
+    "REDIRECT_URI": "@redirect_uri"
+  }
+}
