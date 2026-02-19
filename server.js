@@ -1,33 +1,80 @@
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Use environment variables for token storage
+// Supabase setup
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  console.log('⚠️ SUPABASE_URL and SUPABASE_KEY not set. Tokens will not persist.');
+  console.log('Set them in Vercel Dashboard → Environment Variables');
+}
+
+// Token storage using Supabase
 async function getToken(key) {
-  if (key === 'access_token') {
-    return process.env.TWITTER_ACCESS_TOKEN_STORED;
-  } else if (key === 'refresh_token') {
-    return process.env.TWITTER_REFRESH_TOKEN_STORED;
+  if (!SUPABASE_URL || !SUPABASE_KEY) return null;
+  
+  try {
+    const response = await axios.get(
+      `${SUPABASE_URL}/rest/v1/twitter_tokens?key=eq.${key}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'apikey': SUPABASE_KEY
+        }
+      }
+    );
+    
+    if (response.data && response.data.length > 0) {
+      return response.data[0].value;
+    }
+  } catch (error) {
+    console.error('Supabase get error:', error.message);
   }
   return null;
 }
 
 async function setToken(key, value) {
-  // Log instruction to save token to Vercel env vars
-  const envName = key === 'access_token' ? 'TWITTER_ACCESS_TOKEN_STORED' : 'TWITTER_REFRESH_TOKEN_STORED';
-  console.log(`\n⚠️  SAVE THIS TO VERCEL DASHBOARD:\n${envName}=${value}\n`);
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    console.log(`Token would be: ${key}=${value}`);
+    return;
+  }
   
-  // Also set in current process
-  if (key === 'access_token') {
-    process.env.TWITTER_ACCESS_TOKEN_STORED = value;
-  } else {
-    process.env.TWITTER_REFRESH_TOKEN_STORED = value;
+  try {
+    // Try to update first
+    await axios.patch(
+      `${SUPABASE_URL}/rest/v1/twitter_tokens?key=eq.${key}`,
+      { value, updated_at: new Date().toISOString() },
+      {
+        headers: {
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'apikey': SUPABASE_KEY,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+  } catch (error) {
+    // If update fails, try insert
+    try {
+      await axios.post(
+        `${SUPABASE_URL}/rest/v1/twitter_tokens`,
+        { key, value, created_at: new Date().toISOString() },
+        {
+          headers: {
+            'Authorization': `Bearer ${SUPABASE_KEY}`,
+            'apikey': SUPABASE_KEY,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+    } catch (insertError) {
+      console.error('Supabase set error:', insertError.message);
+    }
   }
 }
 
@@ -91,27 +138,17 @@ app.get('/callback', async (req, res) => {
     const token = tokenResponse.data.access_token;
     const refresh = tokenResponse.data.refresh_token;
     
-    // Store tokens in env vars
+    // Store tokens in Supabase
     await setToken('access_token', token);
     await setToken('refresh_token', refresh);
-    
-    // Show tokens to user so they can add to Vercel
-    const envInstructions = `
-      Add these to Vercel Dashboard (Settings → Environment Variables):
-      
-      TWITTER_ACCESS_TOKEN_STORED=${token}
-      TWITTER_REFRESH_TOKEN_STORED=${refresh}
-    `;
     
     res.send(`
       <html>
         <body>
           <h1>✅ Authentication Successful!</h1>
-          <p>To make bookmarks work permanently, add these env vars to your Vercel project:</p>
-          <pre style="background: #f0f0f0; padding: 10px; overflow: auto;">
-${envInstructions}
-          </pre>
-          <p>Then redeploy the project.</p>
+          <p>Your Twitter bookmarks are now accessible.</p>
+          <p>You can close this window and use the API:</p>
+          <pre>curl https://twitter-bookmarks-server.vercel.app/bookmarks?limit=10</pre>
           <script>window.close();</script>
         </body>
       </html>
